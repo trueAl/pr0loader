@@ -8,20 +8,25 @@ from datetime import datetime
 import dotenv
 from pymongo import MongoClient
 
+# global config
+required_config_keys = ['ME', 'CONSENT', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
+# read filter settings (nsfl, nsfw, nsfp)
+content_flags = 15  # this needs to be calculated later
 
-def get_collection():
+
+def get_collection(col_name):
     connection_string = config['MONGODB_STRING']
     client = MongoClient(connection_string)
     mydb = client["pr0loader"]
-    mycol = mydb["pr0Item"]
+    mycol = mydb[col_name]
     return mycol
 
 
 def concat(message):
-    result = ''
+    _result = ''
     for item in message:
-        result = result + " " + str(item)
-    return result
+        _result = _result + " " + str(item)
+    return _result
 
 
 def log(*message):
@@ -40,7 +45,7 @@ def db_pos(_sort):
     limit = 1
     max_value: -1
     try:
-        max_value = collection.find(filter=_filter, projection=project, sort=sort, limit=limit)[0]['id']
+        max_value = pr0_items_collection.find(filter=_filter, projection=project, sort=sort, limit=limit)[0]['id']
     except:
         max_value = -1
     return max_value
@@ -68,9 +73,9 @@ def fetch_remote_value():
     result = opener.open("https://pr0gramm.com/api/items/get&flags=" + str(15))
     data = result.read()
     encoding = result.info().get_content_charset('utf-8')
-    json_data = json.loads(data.decode(encoding))
+    _json_data = json.loads(data.decode(encoding))
     opener.close()
-    return json_data['items'][0]['id']
+    return _json_data['items'][0]['id']
 
 
 def determine_start():
@@ -87,84 +92,130 @@ def determine_start():
     return highest_remote_value
 
 
+def fetch_info_for_item(_id):
+    _json_data = fetch_json_data(
+        "https://pr0gramm.com/api/items/info?itemId=" + str(current_id) + "&flags=" + str(content_flags))
+    return _json_data
+
+
+def fetch_json_data(url):
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    result = opener.open(url)
+    data = result.read()
+    encoding = result.info().get_content_charset('utf-8')
+    _json_data = json.loads(data.decode(encoding))
+    opener.close()
+    return _json_data
+
+
+def can_run():
+    global required_config_keys
+    _can_run = True
+    for key in required_config_keys:
+        if key not in config:
+            _can_run = False
+    return _can_run
+
+
+def setup_cookie_jar():
+    _jar = http.cookiejar.CookieJar()
+    me_cookie = http.cookiejar.Cookie(version=0, name='me', value=config['ME'], port=None, port_specified=False,
+                                      domain='pr0gramm.com', domain_specified=False, domain_initial_dot=False, path='/',
+                                      path_specified=True, secure=True, expires=None, discard=True, comment=None,
+                                      comment_url=None, rest={'HttpOnly': None}, rfc2109=False)
+    consent_cookie = http.cookiejar.Cookie(version=0, name='euconsent-v2', value=config['CONSENT'], port=None,
+                                           port_specified=False,
+                                           domain='pr0gramm.com', domain_specified=False, domain_initial_dot=False,
+                                           path='/',
+                                           path_specified=True, secure=True, expires=None, discard=True, comment=None,
+                                           comment_url=None, rest={'HttpOnly': None}, rfc2109=False)
+    _jar.set_cookie(me_cookie)
+    _jar.set_cookie(consent_cookie)
+    return _jar
+
+
+def process_media_metadata(_json_data):
+    global current_id, cancel
+    for item in _json_data['items']:
+        add_info = fetch_info_for_item(item['id'])
+        # print(item)
+        if 'comments' in add_info:
+            item['comments'] = add_info['comments']
+        if 'tags' in add_info:
+            item['tags'] = add_info['tags']
+        result = pr0_items_collection.insert_one(item)
+        # print(result)
+        current_id = item['id']
+        log("Written item", current_id, "to database")
+
+
+def get_fs_prefix():
+    config_value = str(config['FILESYSTEM_PREFIX'])
+    if not config_value.endswith("/"):
+        config_value += "/"
+    return config_value
+
+
+def download_medias(_json_data):
+    for item in _json_data['items']:
+        media_name = item['image']
+        fs_prefix = get_fs_prefix()
+        remote_media_prefix = "https://img.pr0gramm.com/"
+        local_file = fs_prefix + media_name
+        log("the media name would be:", local_file)
+        _url = remote_media_prefix + media_name
+        os.makedirs(os.path.dirname(local_file), exist_ok=True)
+        fhand = open(local_file, 'wb')
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+        result = opener.open(_url)
+        size = 0
+        while True:
+            data = result.read(10000)
+            if len(data) < 1:
+                break
+            fhand.write(data)
+            size = size + len(data)
+        opener.close()
+        fhand.close()
+        log("written data: ", size, "bytes for ", media_name)
+
+
+def get_next_current_id(_json_data):
+    items = _json_data['items']
+    return items[-1]['id']
+
+
 # initialize env and load config
 log("Reading configuration")
 config = {
     **dotenv.dotenv_values(".env"),
     **os.environ
 }
-required_config_keys = ['ME', 'CONSENT', 'MONGODB_STRING']
-can_run = True
-for key in required_config_keys:
-    if key not in config:
-        can_run = False
 
-if not can_run:
+log("Checking if configuration satisfies minimal config")
+if not can_run():
     log("It's required to have at least " + ', '.join(required_config_keys) + " set in your env to run this program")
     exit(1)
 
-# create cookie jar and load data
-cookie_jar = http.cookiejar.CookieJar()
-me_cookie = http.cookiejar.Cookie(version=0, name='me', value=config['ME'], port=None, port_specified=False,
-                                  domain='pr0gramm.com', domain_specified=False, domain_initial_dot=False, path='/',
-                                  path_specified=True, secure=True, expires=None, discard=True, comment=None,
-                                  comment_url=None, rest={'HttpOnly': None}, rfc2109=False)
-consent_cookie = http.cookiejar.Cookie(version=0, name='euconsent-v2', value=config['CONSENT'], port=None,
-                                       port_specified=False,
-                                       domain='pr0gramm.com', domain_specified=False, domain_initial_dot=False,
-                                       path='/',
-                                       path_specified=True, secure=True, expires=None, discard=True, comment=None,
-                                       comment_url=None, rest={'HttpOnly': None}, rfc2109=False)
+log("Setting up cookies")
+cookie_jar = setup_cookie_jar()
 
-cookie_jar.set_cookie(me_cookie)
-cookie_jar.set_cookie(consent_cookie)
+log("Preparing DB collections")
+pr0_items_collection = get_collection("pr0items")
 
-# Initialize database
-collection = get_collection()
-
-####
-
-
+log("Determine starting position")
 current_id = determine_start()
 log("About to read from id", current_id)
-
-# read filter settings (nsfl, nsfw, nsfp)
-content_flags = 15  # this needs to be calculated late
 
 # start reading from remote
 cancel = False
 
-
-def fetch_info_for_item(_id):
-    log("Fetching info for id", _id)
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    result = opener.open("https://pr0gramm.com/api/items/info?itemId=" + str(current_id) + "&flags=" + str(content_flags))
-    data = result.read()
-    encoding = result.info().get_content_charset('utf-8')
-    json_data = json.loads(data.decode(encoding))
-    opener.close()
-    return json_data
-
 while not cancel:
     log("fetching data from remote starting with id", current_id)
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    result = opener.open("https://pr0gramm.com/api/items/get?older=" + str(current_id) + "&flags=" + str(content_flags))
-    data = result.read()
-    encoding = result.info().get_content_charset('utf-8')
-    json_data = json.loads(data.decode(encoding))
-    opener.close()
-    # print(json.dumps(json_data, indent=4, sort_keys=True))
-    for item in json_data['items']:
-        add_info = fetch_info_for_item(item['id'])
-        # print(item)
-        item['comments'] = add_info['comments']
-        item['tags'] = add_info ['tags']
-        result = collection.insert_one(item)
-        # print(result)
-        current_id = item['id']
-        log("Written item", current_id, "to database")
-        # cancel = True
-    if current_id == 1:
-        cancel = True
-    time.sleep(1)
-    cancel = True
+    json_data = fetch_json_data(
+        "https://pr0gramm.com/api/items/get?older=" + str(current_id) + "&flags=" + str(content_flags))
+    process_media_metadata(json_data)
+    download_medias(json_data)
+    current_id = get_next_current_id(json_data)
+    if current_id <= 1:
+        break
