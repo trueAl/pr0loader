@@ -4,6 +4,7 @@ import os
 import urllib.request
 import time
 from datetime import datetime
+from urllib.error import URLError
 
 import dotenv
 from pymongo import MongoClient
@@ -12,6 +13,8 @@ from pymongo import MongoClient
 required_config_keys = ['ME', 'CONSENT', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
 # read filter settings (nsfl, nsfw, nsfp)
 content_flags = 15  # this needs to be calculated later
+http_max_tries = 3
+http_timeout = 15
 
 
 def get_collection(col_name):
@@ -69,13 +72,7 @@ def max_db_pos():
 
 def fetch_remote_value():
     log("fetching data from remote to determine starting point")
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    result = opener.open("https://pr0gramm.com/api/items/get&flags=" + str(15))
-    data = result.read()
-    encoding = result.info().get_content_charset('utf-8')
-    _json_data = json.loads(data.decode(encoding))
-    opener.close()
-    return _json_data['items'][0]['id']
+    return fetch_json_data("https://pr0gramm.com/api/items/get&flags=" + str(15))['items'][0]['id']
 
 
 def determine_start():
@@ -89,23 +86,38 @@ def determine_start():
     if max_id_in_db == -1 | min_id_in_db == -1:
         # no local data
         log("no data in db found")
-    return highest_remote_value
+        return highest_remote_value
+    if min_id_in_db != 1:
+        return min_id_in_db
+    return max_id_in_db
 
 
 def fetch_info_for_item(_id):
     _json_data = fetch_json_data(
-        "https://pr0gramm.com/api/items/info?itemId=" + str(current_id) + "&flags=" + str(content_flags))
+        "https://pr0gramm.com/api/items/info?itemId=" + str(_id) + "&flags=" + str(content_flags))
     return _json_data
 
 
 def fetch_json_data(url):
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    result = opener.open(url)
-    data = result.read()
-    encoding = result.info().get_content_charset('utf-8')
-    _json_data = json.loads(data.decode(encoding))
-    opener.close()
-    return _json_data
+    tries = 1
+    successful = False
+    while not successful:
+        if tries > http_max_tries:
+            log("Aborting fetching remote data since more than http_max_tries for", url)
+            raise URLError
+        try:
+            log("Fetching remote value try", tries, "out of", http_max_tries, "for", url)
+            result = opener.open(url, timeout=http_timeout)
+            data = result.read()
+            encoding = result.info().get_content_charset('utf-8')
+            _json_data = json.loads(data.decode(encoding))
+            opener.close()
+            successful = True
+            return _json_data
+        except URLError as e:
+            tries += 1
+            log("There was an error fetching remote data for", url, "with reason", e.reason)
 
 
 def can_run():
@@ -164,20 +176,33 @@ def download_medias(_json_data):
         local_file = fs_prefix + media_name
         log("the media name would be:", local_file)
         _url = remote_media_prefix + media_name
-        os.makedirs(os.path.dirname(local_file), exist_ok=True)
-        fhand = open(local_file, 'wb')
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-        result = opener.open(_url)
-        size = 0
-        while True:
-            data = result.read(10000)
-            if len(data) < 1:
-                break
-            fhand.write(data)
-            size = size + len(data)
-        opener.close()
-        fhand.close()
-        log("written data: ", size, "bytes for ", media_name)
+
+        tries = 1
+        successful = False
+        while not successful:
+            if tries > http_max_tries:
+                log("Aborting fetching remote data since more than http_max_tries for", _url)
+                raise URLError
+            try:
+                log("Fetching remote value try", tries, "out of", http_max_tries, "for", _url)
+                os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                file_handle = open(local_file, 'wb')
+                opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+                result = opener.open(_url, timeout=http_timeout)
+                size = 0
+                while True:
+                    data = result.read(10000)
+                    if len(data) < 1:
+                        break
+                    file_handle.write(data)
+                    size = size + len(data)
+                opener.close()
+                file_handle.close()
+                log("written data: ", size, "bytes for ", media_name)
+                successful = True
+            except URLError as e:
+                tries += 1
+                log("There was an error fetching remote data for", _url, "with reason", e.reason)
 
 
 def get_next_current_id(_json_data):
@@ -218,4 +243,4 @@ while not cancel:
     download_medias(json_data)
     current_id = get_next_current_id(json_data)
     if current_id <= 1:
-        break
+        cancel = True
