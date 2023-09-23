@@ -200,9 +200,9 @@ def download_medias(_json_data):
                 file_handle.close()
                 log("written data: ", size, "bytes for ", media_name)
                 successful = True
-            except URLError as e:
+            except Exception as e: # while Exception is not nice, we want to catch all possible exceptions
                 tries += 1
-                log("There was an error fetching remote data for", _url, "with reason", e.reason)
+                log("There was an error fetching remote data for", _url)
 
 
 def get_next_current_id(_json_data):
