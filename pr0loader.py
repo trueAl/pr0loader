@@ -13,8 +13,8 @@ from pymongo import MongoClient
 required_config_keys = ['ME', 'CONSENT', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
 # read filter settings (nsfl, nsfw, nsfp)
 content_flags = 15  # this needs to be calculated later
-http_max_tries = 3
-http_timeout = 15
+http_max_tries = 100
+http_timeout = 30
 
 
 def get_collection(col_name):
