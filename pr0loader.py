@@ -5,7 +5,7 @@ import urllib.request
 import time
 from datetime import datetime
 from urllib.error import URLError
-import time.sleep
+import time
 import dotenv
 from pymongo import MongoClient
 
