@@ -5,7 +5,7 @@ import urllib.request
 import time
 from datetime import datetime
 from urllib.error import URLError
-
+import time.sleep
 import dotenv
 from pymongo import MongoClient
 
@@ -115,10 +115,10 @@ def fetch_json_data(url):
             opener.close()
             successful = True
             return _json_data
-        except URLError as e:
+        except Exception as e:
             tries += 1
-            log("There was an error fetching remote data for", url, "with reason", e.reason)
-
+            log("There was an error fetching remote data for", url)
+            time.sleep(tries)
 
 def can_run():
     global required_config_keys
