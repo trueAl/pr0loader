@@ -182,7 +182,7 @@ def download_medias(_json_data):
         while not successful:
             if tries > http_max_tries:
                 log("Aborting fetching remote data since more than http_max_tries for", _url)
-                raise URLError
+                raise Exception
             try:
                 log("Fetching remote value try", tries, "out of", http_max_tries, "for", _url)
                 os.makedirs(os.path.dirname(local_file), exist_ok=True)
