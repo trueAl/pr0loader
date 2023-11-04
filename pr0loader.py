@@ -189,6 +189,11 @@ def download_medias(_json_data):
                 file_handle = open(local_file, 'wb')
                 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
                 result = opener.open(_url, timeout=http_timeout)
+                # no need to retry over and over again in case of >400 http response code
+                if result.getcode() > 400:
+                    successful = True
+                    log("Server error downloading", _url)
+                    continue
                 size = 0
                 while True:
                     data = result.read(10000)
