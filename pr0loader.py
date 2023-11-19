@@ -193,14 +193,14 @@ def download_medias(_json_data):
                 if result.getcode() > 400:
                     successful = True
                     log("Server error downloading", _url)
-                    continue
-                size = 0
-                while True:
-                    data = result.read(10000)
-                    if len(data) < 1:
-                        break
-                    file_handle.write(data)
-                    size = size + len(data)
+                    break
+                    size = 0
+                    while True:
+                        data = result.read(10000)
+                        if len(data) < 1:
+                            break
+                        file_handle.write(data)
+                        size = size + len(data)
                 opener.close()
                 file_handle.close()
                 log("written data: ", size, "bytes for ", media_name)
