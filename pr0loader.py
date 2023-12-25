@@ -2,12 +2,13 @@ import http.cookiejar
 import json
 import os
 import urllib.request
-import time
 from datetime import datetime
-from urllib.error import URLError
+from typing import Any, Mapping
+from urllib.error import URLError, HTTPError
 import time
 import dotenv
 from pymongo import MongoClient
+from pymongo.database import Database
 
 # global config
 required_config_keys = ['ME', 'CONSENT', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
@@ -20,7 +21,7 @@ http_timeout = 30
 def get_collection(col_name):
     connection_string = config['MONGODB_STRING']
     client = MongoClient(connection_string)
-    mydb = client["pr0loader"]
+    mydb: Database[Mapping[str, Any] | Any] = client["pr0loader"]
     mycol = mydb[col_name]
     return mycol
 
@@ -120,6 +121,7 @@ def fetch_json_data(url):
             log("There was an error fetching remote data for", url)
             time.sleep(tries)
 
+
 def can_run():
     global required_config_keys
     _can_run = True
@@ -190,26 +192,30 @@ def download_medias(_json_data):
                 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
                 result = opener.open(_url, timeout=http_timeout)
                 # no need to retry over and over again in case of >400 http response code
-                if result.getcode() > 400:
+                if result.status > 400:
                     successful = True
                     log("Server error downloading", _url)
                     break
-                    size = 0
-                    while True:
-                        data = result.read(10000)
-                        if len(data) < 1:
-                            break
-                        file_handle.write(data)
-                        size = size + len(data)
+                size = 0
+                while True:
+                    data = result.read(10000)
+                    if len(data) < 1:
+                        break
+                    file_handle.write(data)
+                    size = size + len(data)
                 opener.close()
                 file_handle.close()
                 log("written data: ", size, "bytes for ", media_name)
                 successful = True
-            except Exception as e: # while Exception is not nice, we want to catch all possible exceptions
+            except HTTPError as e:  # while Exception is not nice, we want to catch all possible exceptions
+                if 400 < e.code < 500:
+                    log("There was an HTTPError > 400", e.reason)
+                    break
                 tries += 1
                 log("There was an error fetching remote data for", _url)
                 time.sleep(tries)
-
+            except Exception as ex:
+                log("An unexpected exception was caught:", ex)
 
 def get_next_current_id(_json_data):
     items = _json_data['items']
