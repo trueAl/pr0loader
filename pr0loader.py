@@ -216,6 +216,9 @@ def download_medias(_json_data):
                 time.sleep(tries)
             except Exception as ex:
                 log("An unexpected exception was caught:", ex)
+                tries += 10
+                time.sleep(tries / 2)
+
 
 def get_next_current_id(_json_data):
     items = _json_data['items']
