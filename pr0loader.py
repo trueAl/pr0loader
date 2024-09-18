@@ -1,61 +1,74 @@
-import json
 import os
+import json
 import time
 import logging
-from datetime import datetime
-from typing import Any
-import dotenv
+from typing import Any, List, Tuple
+
 import requests
+import dotenv
 from pymongo import MongoClient
 from pymongo.collection import Collection
 import pymongo.errors
 
-# Configure logging
+# Configure logging with level INFO and a specific format
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] --- %(message)s',
+    format='[%(asctime)s] --- %(levelname)s --- %(message)s',
     datefmt='%m/%d/%Y, %H:%M:%S'
 )
 
-# Global configuration
-required_config_keys = ['ME', 'CONSENT', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
-content_flags = 15  # Adjust as needed
-http_max_tries = 100
-http_timeout = 30
+# Global configuration variables
+REQUIRED_CONFIG_KEYS = ['ME', 'CONSENT', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
+CONTENT_FLAGS = 15  # Adjust as needed
+HTTP_MAX_TRIES = 100
+HTTP_TIMEOUT = 30
+BASE_API_URL = "https://pr0gramm.com/api"
+REMOTE_MEDIA_PREFIX = "https://img.pr0gramm.com"
 
 
-def get_collection(col_name: str) -> Collection:
+def get_mongo_collection(collection_name: str, config: dict) -> Collection:
     """
-    Connects to the MongoDB database and returns the specified collection.
+    Connect to the MongoDB database and return the specified collection.
 
     Args:
-        col_name (str): The name of the collection to retrieve.
+        collection_name (str): The name of the collection to retrieve.
+        config (dict): Configuration dictionary containing the MongoDB connection string.
 
     Returns:
         Collection: The MongoDB collection object.
     """
     connection_string = config['MONGODB_STRING']
     client = MongoClient(connection_string)
-    mydb = client["pr0loader"]
-    return mydb[col_name]
+    database = client["pr0loader"]
+    return database[collection_name]
 
 
-def can_run():
+def validate_config(config: dict) -> bool:
     """
-    Checks if the required configuration keys are present.
+    Check if the required configuration keys are present in the config dictionary.
+
+    Args:
+        config (dict): Configuration dictionary to validate.
 
     Returns:
         bool: True if all required keys are present, False otherwise.
     """
-    return all(key in config for key in required_config_keys)
+    missing_keys = [key for key in REQUIRED_CONFIG_KEYS if key not in config]
+    if missing_keys:
+        logging.error(f"Missing required configuration keys: {', '.join(missing_keys)}")
+        return False
+    return True
 
 
-def setup_session():
+def setup_http_session(config: dict) -> requests.Session:
     """
-    Sets up the requests session with the necessary cookies.
+    Set up the HTTP session with the necessary cookies.
+
+    Args:
+        config (dict): Configuration dictionary containing cookie values.
 
     Returns:
-        requests.Session: The configured session object.
+        requests.Session: Configured HTTP session with cookies set.
     """
     session = requests.Session()
     cookies = {
@@ -66,13 +79,13 @@ def setup_session():
     return session
 
 
-def fetch_json_data(url, session):
+def fetch_json(url: str, session: requests.Session) -> dict:
     """
-    Fetches JSON data from a given URL using the provided session.
+    Fetch JSON data from a given URL using the provided session, with retries.
 
     Args:
         url (str): The URL to fetch data from.
-        session (requests.Session): The session object to use for the request.
+        session (requests.Session): The HTTP session to use for the request.
 
     Returns:
         dict: The JSON data fetched from the URL.
@@ -81,200 +94,286 @@ def fetch_json_data(url, session):
         Exception: If the data cannot be fetched after max retries.
     """
     tries = 1
-    while tries <= http_max_tries:
+    while tries <= HTTP_MAX_TRIES:
         try:
-            logging.info(f"Fetching remote value try {tries} out of {http_max_tries} for {url}")
-            response = session.get(url, timeout=http_timeout)
+            logging.info(f"Attempt {tries}/{HTTP_MAX_TRIES} - Fetching data from {url}")
+            response = session.get(url, timeout=HTTP_TIMEOUT)
             response.raise_for_status()
             return response.json()
-        except requests.RequestException as e:
-            tries += 1
-            logging.error(f"There was an error fetching remote data for {url}: {e}")
-            time.sleep(tries)
-    logging.error(f"Aborting fetching remote data after {http_max_tries} attempts for {url}")
+        except requests.HTTPError as http_err:
+            status_code = http_err.response.status_code if http_err.response else None
+            if status_code == 429:
+                # Handle rate limiting
+                retry_after = int(http_err.response.headers.get('Retry-After', 60))
+                logging.warning(f"Rate limit exceeded. Retrying after {retry_after} seconds.")
+                time.sleep(retry_after)
+            elif status_code and 400 <= status_code < 500:
+                logging.error(f"Client error {status_code}: {http_err.response.reason}")
+                break  # Do not retry on client errors
+            else:
+                logging.error(f"HTTP error occurred: {http_err}")
+                time.sleep(2 ** tries)
+        except requests.RequestException as req_err:
+            logging.error(f"Network error occurred: {req_err}")
+            time.sleep(2 ** tries)
+        tries += 1
+    logging.error(f"Failed to fetch data from {url} after {HTTP_MAX_TRIES} attempts")
     raise Exception(f"Failed to fetch data from {url}")
 
 
-def db_pos(sort_order):
+def get_db_item_id(sort_order: List[Tuple[str, int]], collection: Collection) -> int:
     """
-    Retrieves the position (ID) from the database based on the sort order.
+    Retrieve the item ID from the database based on the specified sort order.
 
     Args:
-        sort_order (list): The sort order for the query.
+        sort_order (List[Tuple[str, int]]): The sort order for the query.
+        collection (Collection): The MongoDB collection to query.
 
     Returns:
-        int: The ID from the database, or -1 if not found.
+        int: The item ID from the database, or -1 if not found.
     """
     try:
-        doc = pr0_items_collection.find_one({}, projection={'id': 1}, sort=sort_order)
-        if doc:
-            return doc['id']
+        document = collection.find_one({}, projection={'id': 1}, sort=sort_order)
+        if document:
+            return document['id']
         else:
             return -1
-    except pymongo.errors.PyMongoError as e:
-        logging.error(f"Database error: {e}")
+    except pymongo.errors.PyMongoError as db_err:
+        logging.error(f"Database error: {db_err}")
         return -1
 
 
-def min_db_pos():
+def get_min_db_id(collection: Collection) -> int:
     """
-    Retrieves the minimum ID from the database.
-
-    Returns:
-        int: The minimum ID, or -1 if not found.
-    """
-    return db_pos([('id', 1)])
-
-
-def max_db_pos():
-    """
-    Retrieves the maximum ID from the database.
-
-    Returns:
-        int: The maximum ID, or -1 if not found.
-    """
-    return db_pos([('id', -1)])
-
-
-def fetch_remote_value():
-    """
-    Fetches the highest ID value from the remote API.
-
-    Returns:
-        int: The highest remote ID value.
-    """
-    logging.info("Fetching data from remote to determine starting point")
-    url = f"https://pr0gramm.com/api/items/get?flags={content_flags}"
-    data = fetch_json_data(url, session)
-    return data['items'][0]['id']
-
-
-def determine_start():
-    """
-    Determines the starting point (current_id) for data fetching.
-
-    Returns:
-        int: The starting ID for data fetching.
-    """
-    min_id_in_db = min_db_pos()
-    max_id_in_db = max_db_pos()
-    logging.info(f"The DB currently has {min_id_in_db} as its lowest value")
-    logging.info(f"The DB currently has {max_id_in_db} as its highest value")
-    highest_remote_value = fetch_remote_value()
-    logging.info(f"The remote currently has {highest_remote_value} as its highest value")
-    if max_id_in_db == -1 or min_id_in_db == -1:
-        # No local data
-        logging.info("No data in DB found")
-        return highest_remote_value
-    if min_id_in_db != 1:
-        return min_id_in_db
-    return max_id_in_db
-
-
-def fetch_info_for_item(item_id):
-    """
-    Fetches additional info for a specific item.
+    Retrieve the minimum item ID from the database.
 
     Args:
-        item_id (int): The ID of the item.
+        collection (Collection): The MongoDB collection to query.
 
     Returns:
-        dict: The JSON data containing item info.
+        int: The minimum item ID, or -1 if not found.
     """
-    url = f"https://pr0gramm.com/api/items/info?itemId={item_id}&flags={content_flags}"
-    return fetch_json_data(url, session)
+    return get_db_item_id([('id', 1)], collection)
 
 
-def process_media_metadata(json_data):
+def get_max_db_id(collection: Collection) -> int:
     """
-    Processes media metadata and inserts it into the database.
+    Retrieve the maximum item ID from the database.
 
     Args:
-        json_data (dict): The JSON data containing media items.
+        collection (Collection): The MongoDB collection to query.
+
+    Returns:
+        int: The maximum item ID, or -1 if not found.
     """
-    for item in json_data['items']:
-        add_info = fetch_info_for_item(item['id'])
-        if 'comments' in add_info:
-            item['comments'] = add_info['comments']
-        if 'tags' in add_info:
-            item['tags'] = add_info['tags']
+    return get_db_item_id([('id', -1)], collection)
+
+
+def fetch_highest_remote_id(session: requests.Session) -> int:
+    """
+    Fetch the highest item ID available from the remote API.
+
+    Args:
+        session (requests.Session): The HTTP session to use for the request.
+
+    Returns:
+        int: The highest remote item ID.
+
+    Raises:
+        Exception: If no items are found in the remote data.
+    """
+    logging.info("Fetching the highest remote item ID")
+    url = f"{BASE_API_URL}/items/get?flags={CONTENT_FLAGS}"
+    data = fetch_json(url, session)
+    items = data.get('items', [])
+    if items:
+        return items[0]['id']
+    else:
+        logging.error("No items found in remote data.")
+        raise Exception("Failed to fetch highest remote item ID")
+
+
+def determine_id_range(collection: Collection, session: requests.Session, full_update: bool) -> Tuple[int, int]:
+    """
+    Determine the range of item IDs to process based on local and remote data.
+
+    Args:
+        collection (Collection): The MongoDB collection to query.
+        session (requests.Session): The HTTP session to use for API requests.
+        full_update (bool): Whether to perform a full update.
+
+    Returns:
+        Tuple[int, int]: A tuple containing the start ID and end ID.
+    """
+    highest_remote_id = fetch_highest_remote_id(session)
+
+    if full_update:
+        # Process all items from highest remote ID down to ID 1
+        logging.info("FULL_UPDATE is enabled. Processing all items.")
+        return highest_remote_id, 1
+    else:
+        # Proceed with the existing logic
+        min_db_id = get_min_db_id(collection)
+        max_db_id = get_max_db_id(collection)
+        logging.info(f"Local DB min ID: {min_db_id}, max ID: {max_db_id}")
+        logging.info(f"Highest remote ID: {highest_remote_id}")
+
+        if max_db_id == -1 or min_db_id == -1:
+            # Case a: No local data, start from highest remote ID to 1
+            logging.info("No local data found. Starting from the highest remote ID.")
+            return highest_remote_id, 1
+        elif min_db_id != 1:
+            # Case b: Local data exists, but min ID is not 1
+            logging.info("Local data found, but min ID is not 1. Continuing from min DB ID.")
+            return min_db_id, 1
+        else:
+            # Case c: Local data exists, min ID is 1
+            logging.info("Local data complete from ID 1. Starting from highest remote ID to max DB ID.")
+            return highest_remote_id, max_db_id
+
+
+def fetch_item_info(item_id: int, session: requests.Session) -> dict:
+    """
+    Fetch detailed information for a specific item from the API.
+
+    Args:
+        item_id (int): The ID of the item to fetch information for.
+        session (requests.Session): The HTTP session to use for the request.
+
+    Returns:
+        dict: The JSON data containing item information.
+    """
+    url = f"{BASE_API_URL}/items/info?itemId={item_id}&flags={CONTENT_FLAGS}"
+    return fetch_json(url, session)
+
+
+def process_items_metadata(items_data: dict, collection: Collection, session: requests.Session):
+    """
+    Process the metadata of items and insert or update them in the database.
+
+    Args:
+        items_data (dict): The JSON data containing items.
+        collection (Collection): The MongoDB collection to insert or update data.
+        session (requests.Session): The HTTP session to use for additional API requests.
+    """
+    items = items_data.get('items', [])
+    for item in items:
         try:
-            pr0_items_collection.insert_one(item)
-            logging.info(f"Written item {item['id']} to database")
-        except pymongo.errors.PyMongoError as e:
-            logging.error(f"Failed to insert item {item['id']} into database: {e}")
+            # Fetch additional info for the item
+            detailed_info = fetch_item_info(item['id'], session)
+            if 'comments' in detailed_info:
+                item['comments'] = detailed_info['comments']
+            if 'tags' in detailed_info:
+                item['tags'] = detailed_info['tags']
+            
+            # Define the filter and update for upsert operation
+            filter_query = {'id': item['id']}
+            update_data = {'$set': item}
+            
+            # Insert or update the item in the database
+            result = collection.update_one(filter_query, update_data, upsert=True)
+            
+            if result.matched_count > 0:
+                logging.info(f"Updated item {item['id']} in the database")
+            elif result.upserted_id is not None:
+                logging.info(f"Inserted new item {item['id']} into the database")
+            else:
+                logging.info(f"Item {item['id']} was already up-to-date in the database")
+        except pymongo.errors.PyMongoError as db_err:
+            logging.error(f"Failed to insert or update item {item['id']} in the database: {db_err}")
+        except Exception as e:
+            logging.error(f"Error processing item {item['id']}: {e}")
 
 
-def get_fs_prefix():
+def get_filesystem_prefix(config: dict) -> str:
     """
-    Retrieves the filesystem prefix from the configuration.
+    Get the filesystem prefix from the configuration, ensuring it ends with a slash.
+
+    Args:
+        config (dict): Configuration dictionary containing the filesystem prefix.
 
     Returns:
         str: The filesystem prefix with a trailing slash.
     """
-    config_value = str(config['FILESYSTEM_PREFIX'])
-    if not config_value.endswith("/"):
-        config_value += "/"
-    return config_value
+    fs_prefix = str(config['FILESYSTEM_PREFIX'])
+    if not fs_prefix.endswith("/"):
+        fs_prefix += "/"
+    return fs_prefix
 
 
-def download_medias(json_data):
+def download_media_files(items_data: dict, config: dict, session: requests.Session):
     """
-    Downloads media files based on the JSON data.
+    Download media files for the items in the provided data.
 
     Args:
-        json_data (dict): The JSON data containing media items.
+        items_data (dict): The JSON data containing items.
+        config (dict): Configuration dictionary for filesystem settings.
+        session (requests.Session): The HTTP session to use for media requests.
     """
-    for item in json_data['items']:
-        media_name = item['image']
-        fs_prefix = get_fs_prefix()
-        remote_media_prefix = "https://img.pr0gramm.com/"
-        local_file = os.path.join(fs_prefix, media_name)
-        logging.info(f"The media name would be: {local_file}")
-        url = remote_media_prefix + media_name
+    fs_prefix = get_filesystem_prefix(config)
+    items = items_data.get('items', [])
+    for item in items:
+        media_filename = item['image']
+        local_file_path = os.path.join(fs_prefix, media_filename)
+        media_url = f"{REMOTE_MEDIA_PREFIX}/{media_filename}"
+
+        logging.info(f"Preparing to download media: {media_url}")
+
+        # Skip download if file already exists
+        if os.path.exists(local_file_path):
+            logging.info(f"File {local_file_path} already exists. Skipping download.")
+            continue
 
         tries = 1
-        while tries <= http_max_tries:
+        while tries <= HTTP_MAX_TRIES:
             try:
-                logging.info(f"Fetching remote value try {tries} out of {http_max_tries} for {url}")
-                os.makedirs(os.path.dirname(local_file), exist_ok=True)
-                response = session.get(url, timeout=http_timeout, stream=True)
+                logging.info(f"Attempt {tries}/{HTTP_MAX_TRIES} - Downloading media from {media_url}")
+                os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+                response = session.get(media_url, timeout=HTTP_TIMEOUT, stream=True)
                 response.raise_for_status()
                 size = 0
-                with open(local_file, 'wb') as file_handle:
+                with open(local_file_path, 'wb') as file_handle:
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             file_handle.write(chunk)
                             size += len(chunk)
-                logging.info(f"Written data: {size} bytes for {media_name}")
-                break  # Exit the while loop upon success
-            except requests.HTTPError as e:
-                if 400 <= e.response.status_code < 500:
-                    logging.error(f"HTTPError {e.response.status_code}: {e.response.reason}")
-                    break  # Client error, do not retry
+                logging.info(f"Downloaded {size} bytes for {media_filename}")
+                break  # Download successful, exit retry loop
+            except requests.HTTPError as http_err:
+                status_code = http_err.response.status_code if http_err.response else None
+                logging.error(f"Caught HTTPError with status: {status_code}")
+                if status_code == 429:
+                    retry_after = int(http_err.response.headers.get('Retry-After', 60))
+                    logging.warning(f"Rate limit exceeded. Retrying after {retry_after} seconds.")
+                    time.sleep(retry_after)
+                elif status_code and 400 <= status_code < 500:
+                    logging.error(f"Client error {status_code}: {http_err.response.reason}")
+                    break  # Do not retry on client errors
                 else:
-                    tries += 1
-                    logging.error(f"There was an error fetching remote data for {url}: {e}")
-                    time.sleep(tries)
+                    logging.error(f"HTTP error occurred: {http_err}")
+                    time.sleep(2 ** tries)
+            except requests.RequestException as req_err:
+                logging.error(f"Network error occurred: {req_err}")
+                time.sleep(2 ** tries)
             except Exception as e:
-                tries += 1
-                logging.error(f"An unexpected exception was caught: {e}")
-                time.sleep(tries)
+                logging.exception(f"Unexpected error occurred: {e}")
+                raise
+            tries += 1
         else:
-            logging.error(f"Aborting fetching remote data after {http_max_tries} attempts for {url}")
+            logging.error(f"Failed to download media from {media_url} after {HTTP_MAX_TRIES} attempts")
 
 
-def get_next_current_id(json_data):
+def get_next_item_id(items_data: dict) -> int:
     """
-    Retrieves the next current ID from the JSON data.
+    Get the next item ID from the items data for pagination.
 
     Args:
-        json_data (dict): The JSON data containing media items.
+        items_data (dict): The JSON data containing items.
 
     Returns:
-        int or None: The next ID to process, or None if not available.
+        int: The next item ID, or None if not available.
     """
-    items = json_data.get('items', [])
+    items = items_data.get('items', [])
     if items:
         return items[-1]['id']
     else:
@@ -283,49 +382,76 @@ def get_next_current_id(json_data):
 
 def main():
     """
-    The main function that orchestrates the data fetching and processing.
+    Main function to orchestrate the data fetching and processing.
     """
-    global config, session, pr0_items_collection
+    logging.info("Starting the data loader script")
 
-    logging.info("Reading configuration")
+    # Load configuration from environment and .env file
     config = {
         **dotenv.dotenv_values(".env"),
         **os.environ
     }
 
-    logging.info("Checking if configuration satisfies minimal config")
-    if not can_run():
+    # Validate configuration
+    if not validate_config(config):
         logging.error(
-            f"It's required to have at least {', '.join(required_config_keys)} set in your env to run this program"
+            f"The following configuration keys are required: {', '.join(REQUIRED_CONFIG_KEYS)}"
         )
         exit(1)
 
-    logging.info("Setting up session and cookies")
-    session = setup_session()
+    # Parse FULL_UPDATE parameter from configuration
+    full_update_str = config.get('FULL_UPDATE', 'False').lower()
+    full_update = full_update_str in ('true', '1', 'yes')
 
-    logging.info("Preparing DB collections")
-    pr0_items_collection = get_collection("pr0items")
+    if full_update:
+        logging.info("FULL_UPDATE is enabled in configuration")
 
-    logging.info("Determine starting position")
-    current_id = determine_start()
-    logging.info(f"About to read from id {current_id}")
+    # Set up the HTTP session
+    session = setup_http_session(config)
 
-    # Start reading from remote
-    cancel = False
+    # Get the MongoDB collection
+    mongo_collection = get_mongo_collection("pr0items", config)
 
-    while not cancel:
-        logging.info(f"Fetching data from remote starting with id {current_id}")
-        url = f"https://pr0gramm.com/api/items/get?older={current_id}&flags={content_flags}"
-        json_data = fetch_json_data(url, session)
-        process_media_metadata(json_data)
-        download_medias(json_data)
-        next_id = get_next_current_id(json_data)
-        if next_id is None or next_id >= current_id or next_id <= 1:
-            logging.info("No more items to process or invalid next ID.")
-            cancel = True
-        else:
-            current_id = next_id
-        time.sleep(1)  # Sleep to respect API rate limits
+    # Ensure an index on 'id' field for efficient upsert operations
+    mongo_collection.create_index('id', unique=True)
+
+    # Determine the range of item IDs to process
+    start_id, end_id = determine_id_range(mongo_collection, session, full_update)
+    current_id = start_id
+    logging.info(f"Starting to process items from ID {current_id} down to {end_id}")
+
+    # Main processing loop
+    try:
+        while True:
+            logging.info(f"Fetching items starting with ID {current_id}")
+            url = f"{BASE_API_URL}/items/get?older={current_id}&flags={CONTENT_FLAGS}"
+            items_data = fetch_json(url, session)
+
+            # Check if any items were returned
+            if not items_data.get('items'):
+                logging.info("No more items to process.")
+                break
+
+            # Process item metadata and download media files
+            process_items_metadata(items_data, mongo_collection, session)
+            download_media_files(items_data, config, session)
+
+            # Get the next item ID for pagination
+            next_id = get_next_item_id(items_data)
+            if next_id is None or next_id >= current_id or next_id <= end_id:
+                logging.info("No more items to process or reached the end ID.")
+                break
+            else:
+                current_id = next_id
+
+            # Sleep to respect API rate limits
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logging.info("Script interrupted by user.")
+    except Exception as e:
+        logging.exception(f"An unexpected error occurred: {e}")
+
+    logging.info("Data loader script has completed")
 
 
 if __name__ == "__main__":
