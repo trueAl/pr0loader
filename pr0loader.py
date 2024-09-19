@@ -193,7 +193,7 @@ def fetch_highest_remote_id(session: requests.Session) -> int:
         raise Exception("Failed to fetch highest remote item ID")
 
 
-def determine_id_range(collection: Collection, session: requests.Session, full_update: bool) -> Tuple[int, int]:
+def determine_id_range(collection: Collection, session: requests.Session, full_update: bool, start_from: int) -> Tuple[int, int]:
     """
     Determine the range of item IDs to process based on local and remote data.
 
@@ -207,7 +207,10 @@ def determine_id_range(collection: Collection, session: requests.Session, full_u
     """
     highest_remote_id = fetch_highest_remote_id(session)
 
-    if full_update:
+    if start_from:
+        logging.info(f"START_FROM is set. Start preset to {start_from}")
+        return start_from, 1
+    elif full_update:
         # Process all items from highest remote ID down to ID 1
         logging.info("FULL_UPDATE is enabled. Processing all items.")
         return highest_remote_id, 1
@@ -340,7 +343,7 @@ def download_media_files(items_data: dict, config: dict, session: requests.Sessi
                 logging.info(f"Downloaded {size} bytes for {media_filename}")
                 break  # Download successful, exit retry loop
             except requests.HTTPError as http_err:
-                status_code = http_err.response.status_code if http_err.response else None
+                status_code = http_err.response.status_code if http_err.response is not None else None
                 logging.error(f"Caught HTTPError with status: {status_code}")
                 if status_code == 429:
                     retry_after = int(http_err.response.headers.get('Retry-After', 60))
@@ -403,6 +406,9 @@ def main():
     full_update_str = config.get('FULL_UPDATE', 'False').lower()
     full_update = full_update_str in ('true', '1', 'yes')
 
+    # Parse START_FROM parameter from configuration
+    start_from = int(config.get('START_FROM', 1))
+
     if full_update:
         logging.info("FULL_UPDATE is enabled in configuration")
 
@@ -416,7 +422,7 @@ def main():
     mongo_collection.create_index('id', unique=True)
 
     # Determine the range of item IDs to process
-    start_id, end_id = determine_id_range(mongo_collection, session, full_update)
+    start_id, end_id = determine_id_range(mongo_collection, session, full_update, start_from)
     current_id = start_id
     logging.info(f"Starting to process items from ID {current_id} down to {end_id}")
 
