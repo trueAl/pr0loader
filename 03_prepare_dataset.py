@@ -8,11 +8,14 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image, UnidentifiedImageError
 import torch
+import h5py
+import json
+
 
 REQUIRED_CONFIG_KEYS = ['FILESYSTEM_PREFIX']
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='[%(asctime)s] --- %(levelname)s --- %(message)s',
     datefmt='%m/%d/%Y, %H:%M:%S'
 )
@@ -55,37 +58,6 @@ class ImageDataset(Dataset):
             Returns:
                 Tuple containing the transformed image and a dictionary of the metadata.
     """
-    def is_valid_image(self, filename: str) -> bool:
-        """
-        Check if the given filename corresponds to a valid image file.
-
-        Args:
-            filename (str): The name of the image file to check.
-            img_prefix (str): The directory path prefix where the image file is located.
-
-        Returns:
-            bool: True if the file is a valid image, False otherwise.
-
-        Raises:
-            Warning: Prints a warning message if the image file is not identified 
-            or if there is an error opening the file.
-        """
-        full_path = os.path.join(self.img_prefix, filename)
-        logging.debug("Checking image file %s", full_path)
-        if not os.path.isfile(full_path):
-            return False
-        try:
-            # Use 'verify' to quickly check if PIL can recognize the image format.
-            with Image.open(full_path) as img:
-                logging.debug("Verified image file %s", full_path)
-                img.verify()
-            return True
-        except UnidentifiedImageError as e:
-            logging.warning("Warning: Unidentified image file %s: %s", full_path, e)
-            return False
-        except Exception as e:
-            logging.warning("Warning: Error opening image file %s: %s", full_path, e)
-            return False
 
     def __init__(self, csv_file: str, img_prefix: str, transform: transforms.Compose) -> None:
         logging.info("Loading dataset from %s", csv_file)
@@ -93,24 +65,17 @@ class ImageDataset(Dataset):
         self.img_prefix = img_prefix
         self.transform = transform
         logging.info("Dataset loaded with %d samples", len(self.data))
-        # removed the cleaning, instead moved to script 02_clean_dataset.py
-        # to clean up the dataset before loading it here, once
-        # logging.info("Filtering out invalid image files")
-        # original_count = len(self.data)
-        # self.data = self.data[self.data['image'].apply(self.is_valid_image)]
-        # filtered_count = len(self.data)
-        # if filtered_count < original_count:
-        #    logging.info("Filtered out %d entries due to invalid or missing image files.",
-        #                 original_count - filtered_count)
 
     def __len__(self) -> int:
         return len(self.data)
     def __getitem__(self, idx: int) -> Tuple[Any, dict]:
-        row =  self.data.iloc[idx]
-        img_path = os.path.join(self.img_prefix, row['image'])
+        print(self.data.iloc[idx, 1])
+        img_path = os.path.join(self.img_prefix, self.data.iloc[idx, 1])
         img = Image.open(img_path).convert('RGB')
         img = self.transform(img)
-        return img, row.to_dict()
+        labels = json.dumps(self.data.iloc[idx, 2:].to_dict())
+        print(labels)
+        return img, labels
 
 def load_image_dataset(config):
     """
@@ -135,6 +100,41 @@ def load_image_dataset(config):
     )
 
     return my_dataset
+
+def create_hdf5_dataset(my_dataset):
+    """
+    Creates an HDF5 dataset by extracting images and metadata, and saving them to an HDF5 file.
+    Args:
+        my_dataset (iterable): An iterable where each item is a tuple containing
+        an image and its metadata.
+    Returns:
+        None
+    Side Effects:
+        - Logs the progress of processing each sample.
+        - Saves the processed data (images and metadata) to 'processed_data.h5'.
+    Example:
+        >>> my_dataset = [(image1, metadata1), (image2, metadata2)]
+        >>> create_hdf5_dataset(my_dataset)
+    """
+    dataset_len = len(my_dataset)
+
+    batch_size = 32
+    num_workers = 16
+    data_loader = torch.utils.data.DataLoader(my_dataset, batch_size=batch_size,
+                                              num_workers=num_workers, shuffle=False)
+    with h5py.File('processed_data.h5', 'w') as f:
+        images = f.create_dataset('images', (dataset_len, 3, 224, 224), dtype='f')
+        metadata = f.create_dataset('metadata', (dataset_len,), dtype=h5py.special_dtype(vlen=str))
+        print(metadata)
+        current_index = 0
+        for batch_images, batch_metadata in data_loader:
+            batch_size = batch_images.size(0)
+            end_index = current_index + batch_size
+            images[current_index:end_index] = batch_images
+            metadata[current_index:end_index] = batch_metadata
+            current_index = end_index
+            logging.info("Processed %d/%d samples", current_index, dataset_len)
+        logging.info("Finished processing the dataset")
 
 def process_dataset(my_dataset):
     """
@@ -188,6 +188,7 @@ def main() -> None:
     logging.info("Starting with processing of the dataset")
 
     # process_dataset(my_dataset)
+    create_hdf5_dataset(my_dataset)
 
 if __name__ == "__main__":
     main()

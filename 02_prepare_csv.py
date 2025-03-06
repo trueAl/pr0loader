@@ -171,38 +171,38 @@ def check_if_binary_exist(item, config: dict) -> bool:
     return True
 
 def is_valid_image(item: str, config) -> bool:
-        """
-        Check if the given filename corresponds to a valid image file.
+    """
+    Check if the given filename corresponds to a valid image file.
 
-        Args:
-            filename (str): The name of the image file to check.
-            img_prefix (str): The directory path prefix where the image file is located.
+    Args:
+        filename (str): The name of the image file to check.
+        img_prefix (str): The directory path prefix where the image file is located.
 
-        Returns:
-            bool: True if the file is a valid image, False otherwise.
+    Returns:
+        bool: True if the file is a valid image, False otherwise.
 
-        Raises:
-            Warning: Prints a warning message if the image file is not identified 
-            or if there is an error opening the file.
-        """
-        img_prefix = config['FILESYSTEM_PREFIX']
-        filename = item['image']
-        full_path = os.path.join(img_prefix, filename)
-        logging.info("Checking if image file is valid: %s", full_path)
-        if not os.path.isfile(full_path):
-            return False
-        try:
-            # Use 'verify' to quickly check if PIL can recognize the image format.
-            with Image.open(full_path) as img:
-                logging.debug("Verified image file %s", full_path)
-                img.verify()
-            return True
-        except UnidentifiedImageError as e:
-            logging.warning("Warning: Unidentified image file %s: %s", full_path, e)
-            return False
-        except Exception as e:
-            logging.warning("Warning: Error opening image file %s: %s", full_path, e)
-            return False
+    Raises:
+        Warning: Prints a warning message if the image file is not identified 
+        or if there is an error opening the file.
+    """
+    img_prefix = config['FILESYSTEM_PREFIX']
+    filename = item['image']
+    full_path = os.path.join(img_prefix, filename)
+    logging.info("Checking if image file is valid: %s", full_path)
+    if not os.path.isfile(full_path):
+        return False
+    try:
+        # Use 'verify' to quickly check if PIL can recognize the image format.
+        with Image.open(full_path) as img:
+            logging.debug("Verified image file %s", full_path)
+            img.verify()
+        return True
+    except UnidentifiedImageError as e:
+        logging.warning("Warning: Unidentified image file %s: %s", full_path, e)
+        return False
+    except Exception as e:
+        logging.warning("Warning: Error opening image file %s: %s", full_path, e)
+        return False
 
 
 def write_to_csv(filename: str, fieldnames: List[str], data: List[Dict[str, any]], config: dict):
