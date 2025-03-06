@@ -1,4 +1,10 @@
 # pr0loader
+## Purpose
+Create a local copy of the pr0gramms data (images, videos) and all tags and comments to train models downstream.
+
+Current first intended use is to create the pr0tag0nist, but other users might find other use cases for the resulting
+datasets.
+
 
 ## Usage
 ### Setting up .env
@@ -7,7 +13,7 @@ Copy your `template.env` over to `.env` and modify the values accordingly to you
 Grab the cookies from you dev tools, or implement a shiny solution here :-)
 
 ### 01_pr0loader.py
-This script can be configured through the `.env` as well. The full `CONTENT_FLAGS` where 15 at the time of writing, and
+This script can be configured through the `.env` as well. The full `CONTENT_FLAGS` were 15 at the time of writing, and
 can be obtained from the API calls in your browser.
 
 If you run a `FULL_UPDATE = True`, expect roughly `8TB` of data, if you run for all flags.
