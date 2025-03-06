@@ -161,3 +161,6 @@ cython_debug/
 #.idea/
 
 .idea/
+
+*.csv
+*.h5
