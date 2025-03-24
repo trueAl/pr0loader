@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 
 # Global Constants and Configurations
-DEVELOP_MODE = False  # Set to True for development mode, False for normal operation
+DEVELOP_MODE = True  # Set to True for development mode, False for normal operation
 VALID_TAG_REGEX = re.compile(r'^[a-zA-Z0-9 ]+$')  # Regular expression to match valid tags
 IMAGE_EXTENSIONS_REGEX = r'\.(jpg|jpeg|png)$'  # Regex pattern to match image extensions
 NSFW_TAGS_SET = {'nsfw', 'nsfl', 'nsfp'}  # Set of tags to identify NSFW content
@@ -118,9 +118,9 @@ def process_tags(tags: List[dict]) -> Dict[str, any]:
             logging.debug("Excluding tag '%s' as it contains invalid characters.", tag_name)
 
     return {
-        'is_nsfw_present': is_nsfw_present,
-        'is_nsfl_present': is_nsfl_present,
-        'is_nsfp_present': is_nsfp_present,
+        # 'is_nsfw_present': is_nsfw_present,
+        # 'is_nsfl_present': is_nsfl_present,
+        # 'is_nsfp_present': is_nsfp_present,
         'valid_tags': valid_tags
     }
 
@@ -144,9 +144,9 @@ def prepare_output_item(document: dict) -> Dict[str, any]:
     if len(valid_tags) < MINIMUM_VALID_TAGS:
         return None  # Skip this document
 
-    output_item['is_nsfw'] = 'true' if tag_processing_result['is_nsfw_present'] else 'false'
-    output_item['is_nsfl'] = 'true' if tag_processing_result['is_nsfl_present'] else 'false'
-    output_item['is_nsfp'] = 'true' if tag_processing_result['is_nsfp_present'] else 'false'
+    # output_item['is_nsfw'] = 'true' if tag_processing_result['is_nsfw_present'] else 'false'
+    # output_item['is_nsfl'] = 'true' if tag_processing_result['is_nsfl_present'] else 'false'
+    # output_item['is_nsfp'] = 'true' if tag_processing_result['is_nsfp_present'] else 'false'
 
     sorted_tags = sorted(valid_tags, key=lambda x: x.get('confidence', 0), reverse=True)
     top_tags = sorted_tags[:MINIMUM_VALID_TAGS]
@@ -257,7 +257,8 @@ def main():
         logging.info("No documents found matching the query.")
         return
 
-    fieldnames = ['id', 'image', 'is_nsfw', 'is_nsfl', 'is_nsfp']
+    # fieldnames = ['id', 'image', 'is_nsfw', 'is_nsfl', 'is_nsfp']
+    fieldnames = ['id', 'image']
     for i in range(1, MINIMUM_VALID_TAGS + 1):
         fieldnames.append(f'tag{i}')
         # fieldnames.append(f'confidence{i}')
