@@ -21,7 +21,7 @@ logging.basicConfig(
 
 # Global Constants and Configurations
 DEVELOP_MODE = False  # Set to True for development mode, False for normal operation
-VALID_TAG_REGEX = re.compile(r'^[a-zA-Z0-9]+$')  # Regular expression to match valid tags
+VALID_TAG_REGEX = re.compile(r'^[a-zA-Z0-9 ]+$')  # Regular expression to match valid tags
 IMAGE_EXTENSIONS_REGEX = r'\.(jpg|jpeg|png)$'  # Regex pattern to match image extensions
 NSFW_TAGS_SET = {'nsfw', 'nsfl', 'nsfp'}  # Set of tags to identify NSFW content
 MINIMUM_VALID_TAGS = 5  # Minimum number of valid tags required after processing
@@ -65,7 +65,14 @@ def build_query() -> dict:
     """
     query = {
         'image': {'$regex': IMAGE_EXTENSIONS_REGEX, '$options': 'i'},
-        '$expr': {'$gte': [{'$size': '$tags'}, MINIMUM_VALID_TAGS]}
+        '$expr': {'$gte': [{'$size': '$tags'}, MINIMUM_VALID_TAGS]},
+        'tags': {
+            '$not': {
+                '$elemMatch': {
+                    'tag': {'$regex': 'nsfw|nsfl', '$options': 'i'}
+                }
+            }
+        }
     }
     return query
 
@@ -124,7 +131,7 @@ def prepare_output_item(document: dict) -> Dict[str, any]:
     """
     output_item = {
         'id': document.get('id', ''),
-        'image': document.get('image', '')
+        'image': "https://img.pr0gramm.com/" + document.get('image', '')
     }
 
     tags = document.get('tags', [])
