@@ -20,7 +20,7 @@ logging.basicConfig(
 )
 
 # Global Constants and Configurations
-DEVELOP_MODE = True  # Set to True for development mode, False for normal operation
+DEVELOP_MODE = False # Set to True for development mode, False for normal operation
 VALID_TAG_REGEX = re.compile(r'^[a-zA-Z0-9 ]+$')  # Regular expression to match valid tags
 IMAGE_EXTENSIONS_REGEX = r'\.(jpg|jpeg|png)$'  # Regex pattern to match image extensions
 NSFW_TAGS_SET = {'nsfw', 'nsfl', 'nsfp'}  # Set of tags to identify NSFW content
@@ -131,7 +131,7 @@ def prepare_output_item(document: dict) -> Dict[str, any]:
     """
     output_item = {
         'id': document.get('id', ''),
-        'image': "https://img.pr0gramm.com/" + document.get('image', '')
+        'image': document.get('image', '')
     }
 
     tags = document.get('tags', [])
@@ -223,6 +223,7 @@ def write_to_csv(filename: str, fieldnames: List[str], data: List[Dict[str, any]
             for item in data:
                 logging.info("Checking if image file exists and is valid: %s", item['image'])
                 if check_if_binary_exist(item, config) and is_valid_image(item, config):
+                    item['image'] = "https://img.pr0gramm.com/" + item['image']
                     csv_writer.writerow(item)
         logging.info("CSV file saved as: %s", filename)
     except (IOError, OSError, csv.Error) as e:
@@ -252,6 +253,7 @@ def main():
 
     query = build_query()
     documents = fetch_documents(mongo_collection, query)
+    logging.info("Found %d documents matching the query", len(documents))
 
     if not documents:
         logging.info("No documents found matching the query.")

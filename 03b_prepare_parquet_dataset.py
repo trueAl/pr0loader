@@ -14,6 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 REQUIRED_CONFIG_KEYS = ['FILESYSTEM_PREFIX']
+DEV_MODE = False  # Set to True to only process the first 10 lines of the CSV
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -33,7 +34,14 @@ def validate_config(config: dict) -> bool:
 class ImageDataset(Dataset):
     def __init__(self, csv_file: str, img_prefix: str, transform: transforms.Compose) -> None:
         logging.info("Loading dataset from %s", csv_file)
-        self.data = pd.read_csv(csv_file)
+        self.data = pd.read_csv(csv_file,
+                                keep_default_na=False,
+                                dtype=str,                   # Make sure all tags are strings
+                                skipinitialspace=True,       # If there are accidental spaces after commas
+                                encoding='utf-8')            # Or change based on your CSV source)
+        if DEV_MODE:
+            self.data = self.data.head(10)
+            logging.debug("DEV_MODE active: using only first 10 rows of dataset")
         self.img_prefix = img_prefix
         self.transform = transform
         logging.info("Dataset loaded with %d samples", len(self.data))
@@ -43,10 +51,19 @@ class ImageDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Tuple[Any, dict]:
         img_path = os.path.join(self.img_prefix, self.data.iloc[idx, 1])
+        metadata = self.data.iloc[idx, 2:].to_dict()
+        
         img = Image.open(img_path).convert('RGB')
         img = self.transform(img)
-        labels = json.dumps(self.data.iloc[idx, 2:].to_dict())
-        return img, labels
+        logging.debug(
+            "Loaded image '%s' | shape: %s | type: %s (%s) | metadata: %s",
+            img_path,
+            img.shape,
+            type(img).__name__,
+            img.__class__,
+            ", ".join(f"{k}={v}" for k, v in metadata.items())
+        )
+        return img, metadata
 
 
 def load_image_dataset(config):
@@ -79,27 +96,26 @@ def image_tensor_to_jpeg_bytes(image_tensor):
 
 def create_parquet_dataset(my_dataset):
     dataset_len = len(my_dataset)
-    batch_size = 32
+    batch_size = 1
     num_workers = 16
     data_loader = DataLoader(my_dataset, batch_size=batch_size,
                              num_workers=num_workers, shuffle=False)
 
     filename = generate_timestamped_filename(prefix='processed_data', extension='parquet')
-    file_path = os.path.join("Z:\\", filename)
+    file_path = os.path.join("Y:\\", filename)
 
     parquet_writer = None
     current_index = 0
-
+    batch_number = 0  # Introduce a batch counter
     try:
         for batch_images, batch_metadata in data_loader:
+            batch_number += 1
             image_bytes_list = [image_tensor_to_jpeg_bytes(img) for img in batch_images]
 
-            df_batch = pd.DataFrame({
-                "image": image_bytes_list,
-                "metadata": batch_metadata
-            })
+            df_metadata = pd.DataFrame(batch_metadata)
+            df_metadata.insert(0, "image", image_bytes_list)
 
-            table = pa.Table.from_pandas(df_batch)
+            table = pa.Table.from_pandas(df_metadata)
 
             if parquet_writer is None:
                 parquet_writer = pq.ParquetWriter(file_path, table.schema, compression='snappy')
@@ -108,6 +124,15 @@ def create_parquet_dataset(my_dataset):
 
             current_index += batch_images.size(0)
             logging.info("Processed %d/%d samples", current_index, dataset_len)
+            
+    except Exception as e:
+        logging.error(
+            "Error at batch #%d | Batch images shape: %s | Metadata keys: %s | Exception: %s",
+            batch_number,
+            tuple(batch_images.shape) if 'batch_images' in locals() else "unknown",
+            list(batch_metadata.keys()) if 'batch_metadata' in locals() and isinstance(batch_metadata, dict) else "unknown",
+            str(e)
+        )
 
     finally:
         if parquet_writer is not None:
