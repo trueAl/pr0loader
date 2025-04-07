@@ -12,6 +12,7 @@ from torchvision import transforms
 from PIL import Image
 import pyarrow as pa
 import pyarrow.parquet as pq
+import torch
 
 REQUIRED_CONFIG_KEYS = ['FILESYSTEM_PREFIX']
 DEV_MODE = False  # Set to True to only process the first 10 lines of the CSV
@@ -48,12 +49,15 @@ class ImageDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.data)
-
+    
     def __getitem__(self, idx: int) -> Tuple[Any, dict]:
         img_path = os.path.join(self.img_prefix, self.data.iloc[idx, 1])
         metadata = self.data.iloc[idx, 2:].to_dict()
-        
-        img = Image.open(img_path).convert('RGB')
+        try:
+            img = Image.open(img_path).convert('RGB')
+        except Exception as e:
+            logging.error("There was an error dealing with %s: %s", img_path, e)
+            return None
         img = self.transform(img)
         logging.debug(
             "Loaded image '%s' | shape: %s | type: %s (%s) | metadata: %s",
@@ -64,6 +68,11 @@ class ImageDataset(Dataset):
             ", ".join(f"{k}={v}" for k, v in metadata.items())
         )
         return img, metadata
+
+def collate_fn(batch):
+    batch = list(filter(lambda x: x is not None, batch))
+    ###FIXME, batch can become empty, if an element is removed from it, and the default_collate does not like this
+    return torch.utils.data.dataloader.default_collate(batch)
 
 
 def load_image_dataset(config):
@@ -98,8 +107,11 @@ def create_parquet_dataset(my_dataset):
     dataset_len = len(my_dataset)
     batch_size = 1
     num_workers = 16
-    data_loader = DataLoader(my_dataset, batch_size=batch_size,
-                             num_workers=num_workers, shuffle=False)
+    data_loader = DataLoader(my_dataset, 
+                             batch_size=batch_size,
+                             num_workers=num_workers, 
+                             shuffle=False,
+                             collate_fn=collate_fn)
 
     filename = generate_timestamped_filename(prefix='processed_data', extension='parquet')
     file_path = os.path.join("Y:\\", filename)
@@ -139,7 +151,6 @@ def create_parquet_dataset(my_dataset):
             parquet_writer.close()
 
     logging.info("Finished processing the dataset, saved to %s", file_path)
-
 
 def main() -> None:
     config = {
