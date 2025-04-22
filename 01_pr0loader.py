@@ -18,7 +18,7 @@ logging.basicConfig(
 
 # Global configuration variables
 REQUIRED_CONFIG_KEYS = ['ME', 'PP', 'MONGODB_STRING', 'FILESYSTEM_PREFIX']
-CONTENT_FLAGS = 1  # Adjust as needed
+CONTENT_FLAGS = 31  # Adjust as needed
 HTTP_MAX_TRIES = 100
 HTTP_TIMEOUT = 30
 BASE_API_URL = "https://pr0gramm.com/api"
@@ -206,7 +206,7 @@ def determine_id_range(collection: Collection, session: requests.Session, full_u
     """
     highest_remote_id = fetch_highest_remote_id(session)
 
-    if start_from is not 0:
+    if start_from != 0:
         logging.info(f"START_FROM is set. Start preset to {start_from}")
         return start_from, 1
     elif full_update:

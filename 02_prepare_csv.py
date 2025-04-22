@@ -69,7 +69,7 @@ def build_query() -> dict:
         'tags': {
             '$not': {
                 '$elemMatch': {
-                    'tag': {'$regex': 'nsfw|nsfl', '$options': 'i'}
+                    'tag': {'$regex': 'nsfw|nsfl|repost', '$options': 'i'}
                 }
             }
         }

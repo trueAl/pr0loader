@@ -71,7 +71,10 @@ class ImageDataset(Dataset):
 
 def collate_fn(batch):
     batch = list(filter(lambda x: x is not None, batch))
-    ###FIXME, batch can become empty, if an element is removed from it, and the default_collate does not like this
+    # If the batch is empty, return None
+    if len(batch) == 0:
+        return None
+    # Otherwise, use the default_collate function
     return torch.utils.data.dataloader.default_collate(batch)
 
 
@@ -120,7 +123,10 @@ def create_parquet_dataset(my_dataset):
     current_index = 0
     batch_number = 0  # Introduce a batch counter
     try:
-        for batch_images, batch_metadata in data_loader:
+        for batch in data_loader:
+            if batch is None:
+                continue  # Skip empty batches
+            batch_images, batch_metadata = batch
             batch_number += 1
             image_bytes_list = [image_tensor_to_jpeg_bytes(img) for img in batch_images]
 
